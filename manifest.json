@@ -2,7 +2,7 @@
   "name": "L'Île aux Syllabes",
   "short_name": "Île Syllabes",
   "description": "Application bilingue français/italien pour apprendre à lire en s'amusant.",
-  "start_url": "./ile-aux-syllabes.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#8EE3F5",
   "theme_color": "#0EA5A0",
