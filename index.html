@@ -473,7 +473,7 @@ select, input[type=range]{
       </div>
       <div class="game-controls" style="margin-top:10px;">
         <button class="big-btn btn-lilac" id="sentence-prev-btn" onclick="prevSentence()" data-i18n="btn_prev_word">⬅️ Précédent</button>
-        <button class="big-btn btn-lilac" id="sentence-next-btn" onclick="nextSentence()" data-i18n="btn_next_word">➡️ Mot suivant</button>
+        <button class="big-btn btn-lilac" id="sentence-next-btn" onclick="nextSentence()" data-i18n="btn_next_sentence">➡️ Phrase suivante</button>
       </div>
       <button class="big-btn btn-ocean" style="margin-top:20px;" onclick="goToSentenceManager()" data-i18n="btn_manage_sentences">📝 Gérer mes phrases</button>
     </div>
@@ -656,7 +656,7 @@ select, input[type=range]{
     <div class="panel">
       <div class="story-list" id="story-list"></div>
       <div class="add-story-box">
-        <h3 style="margin-top:0;font-family:'Baloo 2';" data-i18n="story_form_add_title">➕ Ajouter une histoire</h3>
+        <h3 style="margin-top:0;font-family:'Baloo 2';" id="story-form-title" data-i18n="story_form_add_title">➕ Ajouter une histoire</h3>
         <input id="new-story-title" placeholder="Titre de l'histoire (ex : Le petit chat curieux)" data-i18n-ph="story_ph_title">
         <button type="button" class="mini-btn mini-ocean" style="margin-bottom:10px;" onclick="openTranslateHelper('new-story-title','new-story-lang')" data-i18n="btn_translate_title">🌐 Traduire le titre</button>
         <textarea id="new-story-text" rows="4" placeholder="Écris ou colle le texte de l'histoire ici..." data-i18n-ph="story_ph_text"></textarea>
@@ -669,7 +669,10 @@ select, input[type=range]{
           <option value="fr">🇫🇷 Français</option>
           <option value="it">🇮🇹 Italiano</option>
         </select>
-        <button class="big-btn btn-leaf" onclick="addStory()" data-i18n="story_form_add_btn">✅ Ajouter l'histoire</button>
+        <div style="display:flex;gap:10px;">
+          <button class="big-btn btn-leaf" id="story-form-submit" onclick="addStory()" data-i18n="story_form_add_btn">✅ Ajouter l'histoire</button>
+          <button class="big-btn btn-lilac" id="story-form-cancel" onclick="cancelEditStory()" style="display:none;" data-i18n="btn_cancel">✖️ Annuler</button>
+        </div>
       </div>
     </div>
   </div>
@@ -831,6 +834,7 @@ const I18N = {
     title_settings:"Réglages",
     btn_listen_word:"🔊 Écouter le mot",
     btn_next_word:"➡️ Mot suivant",
+    btn_next_sentence:"➡️ Phrase suivante",
     btn_prev_word:"⬅️ Précédent",
     btn_next_word_arrow:"Suivant ➡️",
     btn_listen:"🔊 Écouter",
@@ -956,6 +960,7 @@ const I18N = {
     title_settings:"Impostazioni",
     btn_listen_word:"🔊 Ascolta la parola",
     btn_next_word:"➡️ Parola successiva",
+    btn_next_sentence:"➡️ Frase successiva",
     btn_prev_word:"⬅️ Precedente",
     btn_next_word_arrow:"Successiva ➡️",
     btn_listen:"🔊 Ascolta",
@@ -1183,6 +1188,8 @@ let customWords = []; // {word, syllables, emoji, image, audio, lang, category}
 let newWordImageData = null;
 let newStoryImageData = null;
 let editingWordIndex = null;
+let editingBaseWordKey = null; // set when editing a built-in word (its original "lang:word" key)
+let editingStoryId = null;
 let selectedCategoryFilter = null; // null = show all categories
 let selectedDifficultyFilter = null; // null | 'easy' (<=2 syllables/mots) | 'hard' (3+)
 let wordStats = {}; // key "lang:word" -> {streak, attempts, successes}
@@ -1407,8 +1414,15 @@ function iconHtml(item, size){
   return `<span style="font-size:${Math.round(size*0.85)}px;">${item.emoji||''}</span>`;
 }
 
+let deletedBaseWordKeys = []; // array of "lang:word" keys for base words the user deleted
+let baseWordOverrides = {}; // "lang:word" (original) -> edited fields
 function wordPool(lang){
-  const base = lang === 'it' ? WORDS_IT : WORDS_FR;
+  const base = (lang === 'it' ? WORDS_IT : WORDS_FR)
+    .filter(w => !deletedBaseWordKeys.includes(wordKey(w)))
+    .map(w => {
+      const key = wordKey(w);
+      return baseWordOverrides[key] ? Object.assign({}, w, baseWordOverrides[key], {isBase:true, baseKey:key}) : Object.assign({}, w, {isBase:true, baseKey:key});
+    });
   return base.concat(customWords.filter(w=>w.lang===lang));
 }
 function categoriesForLang(lang){
@@ -1673,7 +1687,7 @@ function addStars(n){
 /* ---------------- SAVE / LOAD (localStorage) ---------------- */
 function buildBackupData(){
   return {
-    appVersion: 1,
+    appVersion: 2,
     stars,
     currentLang,
     contrastMode,
@@ -1684,7 +1698,9 @@ function buildBackupData(){
     customSentences,
     wordStats,
     customGroups,
-    customStories: stories.filter(s=>!s.builtin),
+    deletedBaseWordKeys,
+    baseWordOverrides,
+    allStories: stories, // full snapshot — lets built-in stories be edited/deleted too
     storyRecordings // {id: {url: dataURL}}
   };
 }
@@ -1747,7 +1763,11 @@ function importBackup(evt){
       if(Array.isArray(data.customSentences)) customSentences = data.customSentences;
       if(data.wordStats) wordStats = data.wordStats;
       if(Array.isArray(data.customGroups)) customGroups = data.customGroups;
-      if(Array.isArray(data.customStories)){
+      if(Array.isArray(data.deletedBaseWordKeys)) deletedBaseWordKeys = data.deletedBaseWordKeys;
+      if(data.baseWordOverrides) baseWordOverrides = data.baseWordOverrides;
+      if(Array.isArray(data.allStories)){
+        stories = data.allStories;
+      } else if(Array.isArray(data.customStories)){
         stories = stories.filter(s=>s.builtin).concat(data.customStories);
       }
       if(data.storyRecordings) storyRecordings = data.storyRecordings;
@@ -1801,7 +1821,13 @@ function loadState(){
       if(Array.isArray(data.customSentences)) customSentences = data.customSentences;
       if(data.wordStats) wordStats = data.wordStats;
       if(Array.isArray(data.customGroups)) customGroups = data.customGroups;
-    if(Array.isArray(data.customStories)) stories = stories.concat(data.customStories);
+      if(Array.isArray(data.deletedBaseWordKeys)) deletedBaseWordKeys = data.deletedBaseWordKeys;
+      if(data.baseWordOverrides) baseWordOverrides = data.baseWordOverrides;
+    if(Array.isArray(data.allStories)){
+      stories = data.allStories;
+    } else if(Array.isArray(data.customStories)){
+      stories = stories.filter(s=>s.builtin).concat(data.customStories);
+    }
     if(data.storyRecordings) storyRecordings = data.storyRecordings;
   }catch(err){
     console.warn('Données sauvegardées illisibles :', err);
@@ -2428,10 +2454,12 @@ function renderStoryList(){
     const langTag = s.lang==='it' ? '🇮🇹 Italiano' : '🇫🇷 Français';
     item.innerHTML = `
       <div class="emoji">${iconHtml(s, 44)}</div>
-      <div class="info">
+      <div class="info" style="flex:1;">
         <h4>${s.title} <span class="tag">${langTag}</span> ${(Array.isArray(storyRecordings[s.id]) ? storyRecordings[s.id].some(x=>x) : !!storyRecordings[s.id]) ? '<span class="tag">🎙️ Ma voix</span>' : ''}</h4>
         <p>${s.text.slice(0,50)}...</p>
       </div>
+      <button class="icon-btn" style="background:var(--sunshine);" onclick="event.stopPropagation(); editStory(${s.id})" title="Modifier">✏️</button>
+      <button class="icon-btn" style="background:var(--coral);" onclick="event.stopPropagation(); deleteStory(${s.id})" title="Supprimer">🗑️</button>
     `;
     el.appendChild(item);
   });
@@ -2442,14 +2470,58 @@ function addStory(){
   const emoji = document.getElementById('new-story-emoji').value.trim() || '📘';
   const lang = document.getElementById('new-story-lang').value;
   if(!title || !text){ alert("Ajoute un titre et un texte pour l'histoire !"); return; }
-  const id = Date.now();
-  stories.push({id, title, emoji, image:newStoryImageData, text, lang});
+  if(editingStoryId !== null){
+    const idx = stories.findIndex(s=>s.id===editingStoryId);
+    if(idx !== -1){
+      stories[idx] = Object.assign({}, stories[idx], {title, emoji, image:newStoryImageData || stories[idx].image, text, lang});
+    }
+  } else {
+    const id = Date.now();
+    stories.push({id, title, emoji, image:newStoryImageData, text, lang});
+  }
+  cancelEditStory();
+  renderStoryList();
+  saveState();
+}
+function editStory(id){
+  const s = stories.find(x=>x.id===id);
+  if(!s) return;
+  editingStoryId = id;
+  document.getElementById('new-story-title').value = s.title;
+  document.getElementById('new-story-text').value = s.text;
+  document.getElementById('new-story-emoji').value = s.image ? '' : (s.emoji || '');
+  document.getElementById('new-story-lang').value = s.lang;
+  newStoryImageData = s.image || null;
+  document.getElementById('new-story-image-preview').innerHTML = s.image
+    ? `<img src="${s.image}" style="width:70px;height:70px;object-fit:cover;border-radius:12px;box-shadow:0 3px 0 rgba(0,0,0,.15);">`
+    : '';
+  const titleEl = document.getElementById('story-form-title');
+  const submitEl = document.getElementById('story-form-submit');
+  const cancelEl = document.getElementById('story-form-cancel');
+  if(titleEl) titleEl.textContent = currentLang==='it' ? '✏️ Modifica la storia' : "✏️ Modifier l'histoire";
+  if(submitEl) submitEl.textContent = currentLang==='it' ? '💾 Salva le modifiche' : '💾 Enregistrer les modifications';
+  if(cancelEl) cancelEl.style.display = 'inline-flex';
+  if(titleEl) titleEl.scrollIntoView({behavior:'smooth', block:'center'});
+}
+function cancelEditStory(){
+  editingStoryId = null;
   document.getElementById('new-story-title').value = '';
   document.getElementById('new-story-text').value = '';
   document.getElementById('new-story-emoji').value = '';
   document.getElementById('new-story-image').value = '';
   document.getElementById('new-story-image-preview').innerHTML = '';
   newStoryImageData = null;
+  const titleEl = document.getElementById('story-form-title');
+  const submitEl = document.getElementById('story-form-submit');
+  const cancelEl = document.getElementById('story-form-cancel');
+  if(titleEl) titleEl.textContent = t('story_form_add_title');
+  if(submitEl) submitEl.textContent = t('story_form_add_btn');
+  if(cancelEl) cancelEl.style.display = 'none';
+}
+function deleteStory(id){
+  stories = stories.filter(s=>s.id!==id);
+  if(editingStoryId === id) cancelEditStory();
+  Object.keys(storyRecordings).forEach(key=>{ if(String(key)===String(id)) delete storyRecordings[key]; });
   renderStoryList();
   saveState();
 }
@@ -2779,28 +2851,29 @@ function renderMyWords(){
   const catInput = document.getElementById('new-word-category');
   if(catInput && selectedCategoryFilter && editingWordIndex === null) catInput.value = selectedCategoryFilter;
 
-  const displayed = customWords
-    .map((w, idx)=>({w, idx}))
-    .filter(({w}) => !selectedCategoryFilter || (w.category || (w.lang==='it'?'Generale':'Général')) === selectedCategoryFilter);
+  // show every word (base + custom) for the current language, so base words can be edited/deleted too
+  const displayed = wordPool(currentLang)
+    .filter(w => !selectedCategoryFilter || (w.category || (currentLang==='it'?'Generale':'Général')) === selectedCategoryFilter);
 
   if(displayed.length === 0){
     el.innerHTML = '<p style="font-weight:600;color:#7a6b8a;">' + t('no_mywords') + '</p>';
     return;
   }
-  displayed.forEach(({w, idx})=>{
+  displayed.forEach((w)=>{
     const item = document.createElement('div');
     item.className = 'story-item';
     item.style.cursor = 'default';
     const cat = w.category || (w.lang==='it' ? 'Generale' : 'Général');
+    const refAttr = w.isBase ? `'${w.baseKey.replace(/'/g,"\\'")}'` : `${customWords.indexOf(w)}`;
     item.innerHTML = `
       <div class="emoji">${iconHtml(w, 44)}</div>
       <div class="info" style="flex:1;">
-        <h4>${w.word} <span class="tag">${w.lang==='it' ? '🇮🇹 Italiano' : '🇫🇷 Français'}</span> <span class="tag">🏷️ ${cat}</span>${w.audio ? ' <span class="tag">🎙️ Ma voix</span>' : ''}</h4>
+        <h4>${w.word} <span class="tag">${w.lang==='it' ? '🇮🇹 Italiano' : '🇫🇷 Français'}</span> <span class="tag">🏷️ ${cat}</span>${w.audio ? ' <span class="tag">🎙️ Ma voix</span>' : ''}${w.isBase ? '' : ' <span class="tag">✏️ Perso</span>'}</h4>
         <p>${w.syllables.join(' - ')}</p>
       </div>
-      <button class="icon-btn" style="background:var(--ocean);" onclick="event.stopPropagation(); startSyllableGame([customWords[${idx}]])" title="Jouer aux syllabes">🪨</button>
-      <button class="icon-btn" style="background:var(--sunshine);" onclick="event.stopPropagation(); editCustomWord(${idx})" title="Modifier">✏️</button>
-      <button class="icon-btn" style="background:var(--coral);" onclick="event.stopPropagation(); removeCustomWord(${idx})" title="Supprimer">🗑️</button>
+      <button class="icon-btn" style="background:var(--ocean);" onclick="event.stopPropagation(); playWordFromList(${w.isBase}, ${refAttr})" title="Jouer aux syllabes">🪨</button>
+      <button class="icon-btn" style="background:var(--sunshine);" onclick="event.stopPropagation(); editWordEntry(${w.isBase}, ${refAttr})" title="Modifier">✏️</button>
+      <button class="icon-btn" style="background:var(--coral);" onclick="event.stopPropagation(); removeWordEntry(${w.isBase}, ${refAttr})" title="Supprimer">🗑️</button>
     `;
     el.appendChild(item);
   });
@@ -2814,7 +2887,10 @@ function addCustomWord(){
   if(!word){ alert('Écris un mot à ajouter !'); return; }
   const syllables = syllRaw ? syllRaw.split('-').map(s=>s.trim()).filter(Boolean) : autoSyllabify(word);
   const wordData = {word, syllables, emoji, image:newWordImageData, audio:newWordAudioData, lang, category};
-  if(editingWordIndex !== null){
+  if(editingBaseWordKey !== null){
+    // editing one of the built-in words — store as an override keyed by its ORIGINAL identity
+    baseWordOverrides[editingBaseWordKey] = wordData;
+  } else if(editingWordIndex !== null){
     customWords[editingWordIndex] = wordData;
   } else {
     customWords.push(wordData);
@@ -2823,9 +2899,30 @@ function addCustomWord(){
   renderMyWords();
   saveState();
 }
-function editCustomWord(idx){
-  const w = customWords[idx];
-  editingWordIndex = idx;
+function playWordFromList(isBase, ref){
+  const w = isBase ? wordPool(currentLang).find(x=>x.baseKey===ref) : customWords[ref];
+  if(w) startSyllableGame([w]);
+}
+function editWordEntry(isBase, ref){
+  if(isBase){ editCustomWord(null, ref); }
+  else { editCustomWord(ref, null); }
+}
+function removeWordEntry(isBase, ref){
+  if(isBase){
+    if(!deletedBaseWordKeys.includes(ref)) deletedBaseWordKeys.push(ref);
+    if(editingBaseWordKey === ref) resetWordForm();
+  } else {
+    customWords.splice(ref,1);
+    if(editingWordIndex === ref) resetWordForm();
+  }
+  renderMyWords();
+  saveState();
+}
+function editCustomWord(idx, baseKey){
+  const w = baseKey ? wordPool(currentLang).find(x=>x.baseKey===baseKey) : customWords[idx];
+  if(!w) return;
+  editingWordIndex = baseKey ? null : idx;
+  editingBaseWordKey = baseKey || null;
   document.getElementById('new-word-text').value = w.word;
   document.getElementById('new-word-syllables').value = w.syllables.join('-');
   document.getElementById('new-word-emoji').value = w.image ? '' : (w.emoji || '');
@@ -2849,6 +2946,7 @@ function cancelEditWord(){
 }
 function resetWordForm(){
   editingWordIndex = null;
+  editingBaseWordKey = null;
   document.getElementById('new-word-text').value = '';
   document.getElementById('new-word-syllables').value = '';
   document.getElementById('new-word-emoji').value = '';
@@ -2864,12 +2962,7 @@ function resetWordForm(){
   document.getElementById('word-form-submit').textContent = '✅ Ajouter le mot';
   document.getElementById('word-form-cancel').style.display = 'none';
 }
-function removeCustomWord(idx){
-  customWords.splice(idx,1);
-  if(editingWordIndex === idx) resetWordForm();
-  renderMyWords();
-  saveState();
-}
+
 
 /* init */
 document.getElementById('reader-speed').addEventListener('input', ()=>{});
