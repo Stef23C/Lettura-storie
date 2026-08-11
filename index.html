@@ -1230,8 +1230,10 @@ let selectedDifficultyFilter = null; // null | 'easy' (<=2 syllables/mots) | 'ha
 let wordStats = {}; // key "lang:word" -> {streak, attempts, successes}
 let gameWrongCount = 0;
 let autoSpeakTimeout = null; // tracks pending delayed speech, so switching words cancels stale audio
+let reinforcedRepeatTimeout = null; // tracks the pending "say it again" from speakReinforced
 function scheduleAutoSpeak(fn, delay){
   if(autoSpeakTimeout){ clearTimeout(autoSpeakTimeout); autoSpeakTimeout = null; }
+  if(reinforcedRepeatTimeout){ clearTimeout(reinforcedRepeatTimeout); reinforcedRepeatTimeout = null; } // cancel any pending "repeat the word again" from the previous word too
   // stop any speech still queued/playing from a moment ago right away — the actual
   // new speech only starts after "delay", so this never repeats the tight
   // cancel()-then-speak() sequence that broke voice selection on Windows/Chrome
@@ -1886,12 +1888,13 @@ function showVoiceDebugInfo(lang){
 }
 // speaks a word, and if "auto repeat" is enabled, says it a second time after a short pause
 function speakReinforced(text, rate, lang, onend){
+  if(reinforcedRepeatTimeout){ clearTimeout(reinforcedRepeatTimeout); reinforcedRepeatTimeout = null; }
   const times = autoRepeat ? 2 : 1;
   let count = 0;
   function step(){
     speak(text, rate, ()=>{
       count++;
-      if(count < times){ setTimeout(step, 400); }
+      if(count < times){ reinforcedRepeatTimeout = setTimeout(()=>{ reinforcedRepeatTimeout = null; step(); }, 400); }
       else if(onend){ onend(); }
     }, lang);
   }
