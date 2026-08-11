@@ -599,6 +599,13 @@ select, input[type=range]{
           <button class="big-btn btn-leaf" id="word-form-submit" onclick="addCustomWord()" data-i18n="word_form_add_btn">✅ Ajouter le mot</button>
           <button class="big-btn btn-lilac" id="word-form-cancel" onclick="cancelEditWord()" style="display:none;" data-i18n="btn_cancel">✖️ Annuler</button>
         </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:2px dashed #e0d5f5;">
+          <p style="font-size:13px;font-weight:700;color:#7a6b8a;margin:0 0 8px;" data-i18n="import_words_hint">Ou importe plusieurs mots d'un coup depuis un fichier .txt (un mot par ligne, ou "mot|syllabes|emoji|catégorie") :</p>
+          <button type="button" class="big-btn btn-ocean" onclick="document.getElementById('words-txt-import').click()" data-i18n="btn_import_words_txt">📄 Importer une liste de mots (.txt)</button>
+          <button type="button" class="mini-btn mini-lilac" onclick="downloadWordsTemplate()" data-i18n="btn_download_template">⬇️ Modèle .txt</button>
+          <input type="file" id="words-txt-import" accept=".txt" style="display:none;" onchange="importWordsTxt(event)">
+          <p id="words-import-status" style="font-size:12px;color:#7a6b8a;font-weight:600;margin:8px 0 0;"></p>
+        </div>
       </div>
       <h3 style="font-family:'Baloo 2';" data-i18n="mywords_list_title">Mes mots ajoutés</h3>
       <div class="game-controls" style="margin-bottom:14px;">
@@ -672,6 +679,13 @@ select, input[type=range]{
         <div style="display:flex;gap:10px;">
           <button class="big-btn btn-leaf" id="story-form-submit" onclick="addStory()" data-i18n="story_form_add_btn">✅ Ajouter l'histoire</button>
           <button class="big-btn btn-lilac" id="story-form-cancel" onclick="cancelEditStory()" style="display:none;" data-i18n="btn_cancel">✖️ Annuler</button>
+        </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:2px dashed #e0d5f5;">
+          <p style="font-size:13px;font-weight:700;color:#7a6b8a;margin:0 0 8px;" data-i18n="import_stories_hint">Ou importe plusieurs histoires d'un coup depuis un fichier .txt (une histoire par ligne : "titre|texte|emoji") :</p>
+          <button type="button" class="big-btn btn-ocean" onclick="document.getElementById('stories-txt-import').click()" data-i18n="btn_import_stories_txt">📄 Importer une liste d'histoires (.txt)</button>
+          <button type="button" class="mini-btn mini-lilac" onclick="downloadStoriesTemplate()" data-i18n="btn_download_template">⬇️ Modèle .txt</button>
+          <input type="file" id="stories-txt-import" accept=".txt" style="display:none;" onchange="importStoriesTxt(event)">
+          <p id="stories-import-status" style="font-size:12px;color:#7a6b8a;font-weight:600;margin:8px 0 0;"></p>
         </div>
       </div>
     </div>
@@ -851,6 +865,11 @@ const I18N = {
     photo_label:"📷 Ou ajoute une photo à toi (remplace l'emoji) :",
     word_form_add_btn:"✅ Ajouter le mot",
     btn_cancel:"✖️ Annuler",
+    import_words_hint:"Ou importe plusieurs mots d'un coup depuis un fichier .txt (un mot par ligne, ou \"mot|syllabes|emoji|catégorie\") :",
+    btn_import_words_txt:"📄 Importer une liste de mots (.txt)",
+    btn_download_template:"⬇️ Modèle .txt",
+    import_stories_hint:"Ou importe plusieurs histoires d'un coup depuis un fichier .txt (une histoire par ligne : \"titre|texte|emoji\") :",
+    btn_import_stories_txt:"📄 Importer une liste d'histoires (.txt)",
     mywords_list_title:"Mes mots ajoutés",
     btn_play_syllables_mine:"🪨 Jouer aux syllabes avec mes mots",
     btn_read_mine:"🔤 Lire mes mots en entier",
@@ -977,6 +996,11 @@ const I18N = {
     photo_label:"📷 Oppure aggiungi una tua foto (sostituisce l'emoji):",
     word_form_add_btn:"✅ Aggiungi la parola",
     btn_cancel:"✖️ Annulla",
+    import_words_hint:"Oppure importa più parole insieme da un file .txt (una parola per riga, oppure \"parola|sillabe|emoji|categoria\"):",
+    btn_import_words_txt:"📄 Importa un elenco di parole (.txt)",
+    btn_download_template:"⬇️ Modello .txt",
+    import_stories_hint:"Oppure importa più storie insieme da un file .txt (una storia per riga: \"titolo|testo|emoji\"):",
+    btn_import_stories_txt:"📄 Importa un elenco di storie (.txt)",
     mywords_list_title:"Le mie parole aggiunte",
     btn_play_syllables_mine:"🪨 Gioca alle sillabe con le mie parole",
     btn_read_mine:"🔤 Leggi le mie parole intere",
@@ -1446,6 +1470,82 @@ function openTranslateHelper(textFieldId, langFieldId){
   const targetLang = document.getElementById(langFieldId).value || currentLang;
   const url = `https://translate.google.com/?sl=auto&tl=${targetLang}&text=${encodeURIComponent(text)}&op=translate`;
   window.open(url, '_blank');
+}
+
+/* ---------------- BULK IMPORT FROM .TXT ---------------- */
+function downloadTextFile(filename, content){
+  const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function downloadWordsTemplate(){
+  const content = currentLang==='it'
+    ? "# Un modo semplice: una parola per riga\ncoccinella\nfarfalla\n\n# Un modo pi\u00f9 completo (facoltativo): parola|sillabe|emoji|categoria\ndinosauro|di-no-sau-ro|\ud83e\udd96|Animali\n"
+    : "# Façon simple : un mot par ligne\ncoccinelle\npapillon\n\n# Façon complète (facultatif) : mot|syllabes|emoji|catégorie\ndinosaure|di-no-saure|\ud83e\udd96|Animaux\n";
+  downloadTextFile('modele-mots.txt', content);
+}
+function downloadStoriesTemplate(){
+  const content = currentLang==='it'
+    ? "# Una storia per riga: titolo|testo|emoji (emoji facoltativa)\nIl coniglio veloce|Il coniglio corre nel prato. Salta felice tra i fiori.|\ud83d\udc30\n"
+    : "# Une histoire par ligne : titre|texte|emoji (emoji facultatif)\nLe lapin rapide|Le lapin court dans le pré. Il saute joyeusement parmi les fleurs.|\ud83d\udc30\n";
+  downloadTextFile('modele-histoires.txt', content);
+}
+function importWordsTxt(evt){
+  const file = evt.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    const lang = document.getElementById('new-word-lang').value;
+    const lines = reader.result.split(/\r?\n/).map(l=>l.trim()).filter(l=>l && !l.startsWith('#'));
+    let count = 0;
+    lines.forEach(line=>{
+      const parts = line.split('|').map(p=>p.trim());
+      const word = parts[0];
+      if(!word) return;
+      const syllables = parts[1] ? parts[1].split('-').map(s=>s.trim()).filter(Boolean) : autoSyllabify(word);
+      const emoji = parts[2] || '📘';
+      const category = parts[3] || (lang==='it' ? 'Generale' : 'Général');
+      customWords.push({word, syllables, emoji, image:null, audio:null, lang, category});
+      count++;
+    });
+    document.getElementById('words-txt-import').value = '';
+    document.getElementById('words-import-status').textContent = currentLang==='it'
+      ? `✅ ${count} parole importate!`
+      : `✅ ${count} mots importés !`;
+    renderMyWords();
+    saveState();
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+function importStoriesTxt(evt){
+  const file = evt.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    const lang = document.getElementById('new-story-lang').value;
+    const lines = reader.result.split(/\r?\n/).map(l=>l.trim()).filter(l=>l && !l.startsWith('#'));
+    let count = 0;
+    lines.forEach(line=>{
+      const parts = line.split('|').map(p=>p.trim());
+      const title = parts[0];
+      const text = parts[1];
+      if(!title || !text) return;
+      const emoji = parts[2] || '📘';
+      const id = Date.now() + count;
+      stories.push({id, title, emoji, image:null, text, lang});
+      count++;
+    });
+    document.getElementById('stories-txt-import').value = '';
+    document.getElementById('stories-import-status').textContent = currentLang==='it'
+      ? `✅ ${count} storie importate!`
+      : `✅ ${count} histoires importées !`;
+    renderStoryList();
+    saveState();
+  };
+  reader.readAsText(file, 'UTF-8');
 }
 
 let gameWords = [];
