@@ -502,6 +502,13 @@ select, input[type=range]{
           <button class="big-btn btn-leaf" id="sentence-form-submit" onclick="addCustomSentence()" data-i18n="sentence_form_add_btn">✅ Ajouter la phrase</button>
           <button class="big-btn btn-lilac" id="sentence-form-cancel" onclick="cancelEditSentence()" style="display:none;" data-i18n="btn_cancel">✖️ Annuler</button>
         </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:2px dashed #e0d5f5;">
+          <p style="font-size:13px;font-weight:700;color:#7a6b8a;margin:0 0 8px;" data-i18n="import_sentences_hint">Ou importe plusieurs phrases d'un coup depuis un fichier .txt (une phrase par ligne : "Le chat dort|🐱|Animaux") :</p>
+          <button type="button" class="big-btn btn-ocean" onclick="document.getElementById('sentences-txt-import').click()" data-i18n="btn_import_sentences_txt">📄 Importer une liste de phrases (.txt)</button>
+          <button type="button" class="mini-btn mini-lilac" onclick="downloadSentencesTemplate()" data-i18n="btn_download_template">⬇️ Modèle .txt</button>
+          <input type="file" id="sentences-txt-import" accept=".txt" style="display:none;" onchange="importSentencesTxt(event)">
+          <p id="sentences-import-status" style="font-size:12px;color:#7a6b8a;font-weight:600;margin:8px 0 0;"></p>
+        </div>
       </div>
       <h3 style="font-family:'Baloo 2';" data-i18n="sentences_list_title">Mes phrases ajoutées</h3>
       <div class="story-list" id="sentences-list"></div>
@@ -834,6 +841,8 @@ const I18N = {
     sentence_form_add_title:"➕ Ajouter une phrase",
     sentence_ph_text:"Écris une phrase courte (ex : Le chien court vite)",
     sentence_form_add_btn:"✅ Ajouter la phrase",
+    import_sentences_hint:"Ou importe plusieurs phrases d'un coup depuis un fichier .txt (une phrase par ligne : \"Le chat dort|🐱|Animaux\") :",
+    btn_import_sentences_txt:"📄 Importer une liste de phrases (.txt)",
     btn_manage_sentences:"📝 Gérer mes phrases",
     title_sentence_manager:"Mes phrases",
     sentences_intro:"Ajoute, modifie ou supprime tes propres phrases pour le jeu \"Phrases\".",
@@ -965,6 +974,8 @@ const I18N = {
     sentence_form_add_title:"➕ Aggiungi una frase",
     sentence_ph_text:"Scrivi una frase corta (es: Il cane corre veloce)",
     sentence_form_add_btn:"✅ Aggiungi la frase",
+    import_sentences_hint:"Oppure importa più frasi insieme da un file .txt (una frase per riga: \"Il gatto dorme|🐱|Animali\"):",
+    btn_import_sentences_txt:"📄 Importa un elenco di frasi (.txt)",
     btn_manage_sentences:"📝 Gestisci le mie frasi",
     title_sentence_manager:"Le mie frasi",
     sentences_intro:"Aggiungi, modifica o elimina le tue frasi per il gioco \"Frasi\".",
@@ -1232,6 +1243,33 @@ let sentenceWrongCount = 0;
 function wordKey(w){
   return (w.lang || currentLang) + ':' + (w.word || '').toLowerCase();
 }
+/* ---------------- DUPLICATE DETECTION ---------------- */
+function wordExists(word, lang, excludeBaseKey, excludeCustomIdx){
+  const norm = word.trim().toLowerCase();
+  return wordPool(lang).some(w=>{
+    if(w.word.trim().toLowerCase() !== norm) return false;
+    if(w.isBase && w.baseKey === excludeBaseKey) return false; // it's the one being edited
+    if(!w.isBase && excludeCustomIdx !== undefined && customWords[excludeCustomIdx] === w) return false;
+    return true;
+  });
+}
+function sentenceExists(words, lang, excludeSentence){
+  const norm = words.join(' ').trim().toLowerCase();
+  return sentencePool(lang).some(s=>{
+    if(s.words.join(' ').trim().toLowerCase() !== norm) return false;
+    if(excludeSentence && s === excludeSentence) return false;
+    return true;
+  });
+}
+function storyExists(title, lang, excludeId){
+  const norm = title.trim().toLowerCase();
+  return stories.some(s=>{
+    if(s.lang !== lang) return false;
+    if(s.title.trim().toLowerCase() !== norm) return false;
+    if(excludeId !== undefined && s.id === excludeId) return false;
+    return true;
+  });
+}
 function recordWordResult(w, success){
   if(!w || !w.word) return;
   const key = wordKey(w);
@@ -1453,9 +1491,83 @@ function categoriesForLang(lang){
   const cats = wordPool(lang).map(w=>w.category || (lang==='it' ? 'Generale' : 'Général'));
   return [...new Set(cats)].sort();
 }
+function autoSyllabifyCore(w){
+  // heuristic syllabifier for French/Italian: groups vowel runs as single nuclei
+  // (handles diphthongs like "oi", "eau"), and distributes consonant clusters
+  // following common rules — single consonant → next syllable, unsplittable
+  // clusters (bl, br, tr, gn, ch...) stay together, other clusters split evenly.
+  const vowels = 'aeiouyàèéìòùâêîôûäëïöü';
+  const isVowel = c => vowels.includes(c);
+  const unsplittable = new Set(['bl','br','cl','cr','dr','fl','fr','gl','gr','pl','pr','tr','vr','ch','gh','gn','sc','qu']);
+  const chars = w.split('');
+  const groups = [];
+  let i = 0;
+  while(i < chars.length){
+    if(isVowel(chars[i])){
+      let j = i;
+      while(j < chars.length && isVowel(chars[j])) j++;
+      groups.push({type:'V', text: chars.slice(i,j).join('')});
+      i = j;
+    } else {
+      let j = i;
+      while(j < chars.length && !isVowel(chars[j])) j++;
+      groups.push({type:'C', text: chars.slice(i,j).join('')});
+      i = j;
+    }
+  }
+  if(!groups.some(g=>g.type==='V')) return [w];
+  const syllables = [];
+  let current = '';
+  for(let k=0; k<groups.length; k++){
+    const g = groups[k];
+    if(g.type === 'C'){
+      const isFirst = k === 0;
+      const isLast = k === groups.length - 1;
+      if(isFirst || isLast){
+        current += g.text;
+      } else {
+        const c = g.text;
+        if(c.length === 1){
+          syllables.push(current);
+          current = c;
+        } else {
+          const lastTwo = c.slice(-2);
+          if(unsplittable.has(lastTwo)){
+            current += c.slice(0, -2);
+            syllables.push(current);
+            current = lastTwo;
+          } else {
+            current += c.slice(0, 1);
+            syllables.push(current);
+            current = c.slice(1);
+          }
+        }
+      }
+    } else {
+      current += g.text;
+    }
+  }
+  syllables.push(current);
+  return syllables.filter(Boolean);
+}
 function autoSyllabify(word){
-  const parts = word.toLowerCase().split(/(?<=[aeiouyàèéìòùâêîôûäëïöü])/i).filter(Boolean);
-  return parts.length ? parts : [word];
+  const w = word.toLowerCase();
+  // compound words (hyphens, apostrophes, spaces) — syllabify each alphabetic
+  // chunk separately, then re-attach the separators so they don't get treated
+  // as consonants and produce broken results (e.g. "arc-en-ciel")
+  const tokens = w.match(/[a-zàèéìòùâêîôûäëïöü]+|[^a-zàèéìòùâêîôûäëïöü]+/g);
+  if(!tokens || tokens.length <= 1) return autoSyllabifyCore(w);
+  let result = [];
+  tokens.forEach(tok=>{
+    if(/^[a-zàèéìòùâêîôûäëïöü]+$/.test(tok)){
+      result = result.concat(autoSyllabifyCore(tok));
+    } else if(result.length){
+      result[result.length-1] += tok; // attach separator to the previous syllable
+    } else {
+      result.push(tok);
+    }
+  });
+  return result.length ? result : [word];
 }
 // opens Google Translate in a new tab with the current field's text, pre-set to translate
 // into whichever language is selected in the paired language dropdown — requires internet,
@@ -1500,11 +1612,15 @@ function importWordsTxt(evt){
   reader.onload = ()=>{
     const lang = document.getElementById('new-word-lang').value;
     const lines = reader.result.split(/\r?\n/).map(l=>l.trim()).filter(l=>l && !l.startsWith('#'));
-    let count = 0;
+    let count = 0, skipped = 0;
+    const seenInFile = new Set();
     lines.forEach(line=>{
       const parts = line.split('|').map(p=>p.trim());
       const word = parts[0];
       if(!word) return;
+      const norm = lang+':'+word.toLowerCase();
+      if(seenInFile.has(norm) || wordExists(word, lang)){ skipped++; return; }
+      seenInFile.add(norm);
       const syllables = parts[1] ? parts[1].split('-').map(s=>s.trim()).filter(Boolean) : autoSyllabify(word);
       const emoji = parts[2] || '📘';
       const category = parts[3] || (lang==='it' ? 'Generale' : 'Général');
@@ -1513,8 +1629,8 @@ function importWordsTxt(evt){
     });
     document.getElementById('words-txt-import').value = '';
     document.getElementById('words-import-status').textContent = currentLang==='it'
-      ? `✅ ${count} parole importate!`
-      : `✅ ${count} mots importés !`;
+      ? `✅ ${count} parole importate! ${skipped ? `(${skipped} già presenti, saltate)` : ''}`
+      : `✅ ${count} mots importés ! ${skipped ? `(${skipped} déjà présents, ignorés)` : ''}`;
     renderMyWords();
     saveState();
   };
@@ -1527,12 +1643,16 @@ function importStoriesTxt(evt){
   reader.onload = ()=>{
     const lang = document.getElementById('new-story-lang').value;
     const lines = reader.result.split(/\r?\n/).map(l=>l.trim()).filter(l=>l && !l.startsWith('#'));
-    let count = 0;
+    let count = 0, skipped = 0;
+    const seenInFile = new Set();
     lines.forEach(line=>{
       const parts = line.split('|').map(p=>p.trim());
       const title = parts[0];
       const text = parts[1];
       if(!title || !text) return;
+      const norm = lang+':'+title.toLowerCase();
+      if(seenInFile.has(norm) || storyExists(title, lang)){ skipped++; return; }
+      seenInFile.add(norm);
       const emoji = parts[2] || '📘';
       const id = Date.now() + count;
       stories.push({id, title, emoji, image:null, text, lang});
@@ -1540,9 +1660,47 @@ function importStoriesTxt(evt){
     });
     document.getElementById('stories-txt-import').value = '';
     document.getElementById('stories-import-status').textContent = currentLang==='it'
-      ? `✅ ${count} storie importate!`
-      : `✅ ${count} histoires importées !`;
+      ? `✅ ${count} storie importate! ${skipped ? `(${skipped} già presenti, saltate)` : ''}`
+      : `✅ ${count} histoires importées ! ${skipped ? `(${skipped} déjà présentes, ignorées)` : ''}`;
     renderStoryList();
+    saveState();
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+function downloadSentencesTemplate(){
+  const content = currentLang==='it'
+    ? "# Una frase per riga: frase|emoji|categoria (emoji e categoria facoltative)\nIl gatto dorme|\ud83d\udc31|Animali\nLa mela \u00e8 rossa|\ud83c\udf4e|Cibo\n"
+    : "# Une phrase par ligne : phrase|emoji|catégorie (emoji et catégorie facultatifs)\nLe chat dort|🐱|Animaux\nLa pomme est rouge|🍎|Nourriture\n";
+  downloadTextFile('modele-phrases.txt', content);
+}
+function importSentencesTxt(evt){
+  const file = evt.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    const lang = document.getElementById('new-sentence-lang').value;
+    const lines = reader.result.split(/\r?\n/).map(l=>l.trim()).filter(l=>l && !l.startsWith('#'));
+    let count = 0, skipped = 0;
+    const seenInFile = new Set();
+    lines.forEach(line=>{
+      const parts = line.split('|').map(p=>p.trim());
+      const phrase = parts[0];
+      if(!phrase) return;
+      const words = phrase.split(/\s+/).filter(Boolean);
+      if(words.length < 2) return; // a "sentence" needs at least 2 words to be orderable
+      const norm = lang+':'+words.join(' ').toLowerCase();
+      if(seenInFile.has(norm) || sentenceExists(words, lang)){ skipped++; return; }
+      seenInFile.add(norm);
+      const emoji = parts[1] || '📘';
+      const category = parts[2] || (lang==='it' ? 'Generale' : 'Général');
+      customSentences.push({words, emoji, lang, category});
+      count++;
+    });
+    document.getElementById('sentences-txt-import').value = '';
+    document.getElementById('sentences-import-status').textContent = currentLang==='it'
+      ? `✅ ${count} frasi importate! ${skipped ? `(${skipped} già presenti, saltate)` : ''}`
+      : `✅ ${count} phrases importées ! ${skipped ? `(${skipped} déjà présentes, ignorées)` : ''}`;
+    renderSentenceManager();
     saveState();
   };
   reader.readAsText(file, 'UTF-8');
@@ -2243,6 +2401,10 @@ function addCustomSentence(){
   if(!text){ alert(t('no_words_lang')); return; }
   const words = text.split(/\s+/).filter(Boolean);
   if(words.length < 2){ alert(currentLang==='it' ? 'Scrivi almeno due parole.' : 'Écris au moins deux mots.'); return; }
+  if(editingSentenceIndex === null && sentenceExists(words, lang)){
+    alert(currentLang==='it' ? '⚠️ Questa frase esiste già in questa lingua.' : '⚠️ Cette phrase existe déjà dans cette langue.');
+    return;
+  }
   const sentenceData = {words, emoji, lang, category};
   if(editingSentenceIndex !== null){
     customSentences[editingSentenceIndex] = sentenceData;
@@ -2570,6 +2732,10 @@ function addStory(){
   const emoji = document.getElementById('new-story-emoji').value.trim() || '📘';
   const lang = document.getElementById('new-story-lang').value;
   if(!title || !text){ alert("Ajoute un titre et un texte pour l'histoire !"); return; }
+  if(editingStoryId === null && storyExists(title, lang)){
+    alert(currentLang==='it' ? `⚠️ Una storia intitolata "${title}" esiste già in questa lingua.` : `⚠️ Une histoire intitulée "${title}" existe déjà dans cette langue.`);
+    return;
+  }
   if(editingStoryId !== null){
     const idx = stories.findIndex(s=>s.id===editingStoryId);
     if(idx !== -1){
@@ -2985,6 +3151,11 @@ function addCustomWord(){
   const lang = document.getElementById('new-word-lang').value;
   const category = document.getElementById('new-word-category').value.trim() || (lang==='it' ? 'Generale' : 'Général');
   if(!word){ alert('Écris un mot à ajouter !'); return; }
+  const isEditing = editingBaseWordKey !== null || editingWordIndex !== null;
+  if(!isEditing && wordExists(word, lang)){
+    alert(currentLang==='it' ? `⚠️ La parola "${word}" esiste già in questa lingua.` : `⚠️ Le mot "${word}" existe déjà dans cette langue.`);
+    return;
+  }
   const syllables = syllRaw ? syllRaw.split('-').map(s=>s.trim()).filter(Boolean) : autoSyllabify(word);
   const wordData = {word, syllables, emoji, image:newWordImageData, audio:newWordAudioData, lang, category};
   if(editingBaseWordKey !== null){
